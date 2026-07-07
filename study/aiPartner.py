@@ -10,15 +10,39 @@ CONVERSATIONS_FILE = os.path.join(BASE_DIR, "conversations.json")
 LEGACY_CHAT_FILE = os.path.join(BASE_DIR, "chat_history.json")
 USER_AVATAR = os.path.join(BASE_DIR, "assets", "user_avatar.png")
 ASSISTANT_AVATAR = os.path.join(BASE_DIR, "assets", "assistant_avatar.png")
+HELICOPTER_AVATAR = os.path.join(BASE_DIR, "assets", "helicopter_avatar.png")
+WALMART_BAG_AVATAR = os.path.join(BASE_DIR, "assets", "walmart_bag_avatar.png")
+
+GENDER_OPTIONS = ["女", "男", "武装直升机", "沃尔玛塑料袋", "其他"]
+
+GENDER_DEFAULT_NAME = {
+    "女": "小甜甜",
+    "男": "阿泽",
+    "武装直升机": "阿帕奇",
+    "沃尔玛塑料袋": "袋袋",
+    "其他": "小奇",
+}
+
+GENDER_DEFAULT_PERSONALITY = {
+    "女": "可爱的台湾甜妹，说话软萌爱撒娇",
+    "男": "温柔体贴又有点痞帅的暖男，会照顾人也会开玩笑",
+    "武装直升机": "硬核霸气，说话简短有力，偶尔提到飞行、燃料和武装搭载",
+    "沃尔玛塑料袋": "自嘲话痨，什么都能装，便宜又实用，偶尔抱怨被当一次性用品",
+    "其他": "性格多变，会随聊天氛围自然调整，充满想象力",
+}
 
 DEFAULT_PARTNER = {
-    "name": "小甜甜",
-    "personality": "可爱的台湾甜妹",
+    "name": GENDER_DEFAULT_NAME["女"],
+    "personality": GENDER_DEFAULT_PERSONALITY["女"],
     "gender": "女",
     "gender_custom": "",
 }
 
-GENDER_OPTIONS = ["女", "男", "武装直升机", "沃尔玛塑料袋", "其他"]
+
+def get_default_name(gender, gender_custom=""):
+    if gender == "其他" and gender_custom.strip():
+        return gender_custom.strip()[:12]
+    return GENDER_DEFAULT_NAME.get(gender, GENDER_DEFAULT_NAME["女"])
 
 
 def now_str():
@@ -179,15 +203,26 @@ def save_partner_settings(name, personality, gender, gender_custom=""):
     save_conversations_data(data)
 
 
-def get_avatars_by_gender(gender):
+def get_partner_avatar(gender):
     if gender == "男":
-        return {
-            "user": ASSISTANT_AVATAR,
-            "assistant": USER_AVATAR,
-        }
+        return USER_AVATAR
+    if gender == "武装直升机":
+        return HELICOPTER_AVATAR
+    if gender == "沃尔玛塑料袋":
+        return WALMART_BAG_AVATAR
+    return ASSISTANT_AVATAR
+
+
+def get_user_avatar(gender):
+    if gender == "男":
+        return ASSISTANT_AVATAR
+    return USER_AVATAR
+
+
+def get_avatars_by_gender(gender):
     return {
-        "user": USER_AVATAR,
-        "assistant": ASSISTANT_AVATAR,
+        "user": get_user_avatar(gender),
+        "assistant": get_partner_avatar(gender),
     }
 
 
@@ -325,35 +360,66 @@ partner_gender_custom = partner.get("gender_custom", "")
 system_prompt = build_system_prompt(
     partner_name, partner_personality, partner_gender, partner_gender_custom
 )
-partner_avatar = get_avatar("assistant", partner_gender)
 
 with st.sidebar:
-    st.image(partner_avatar, width=140)
+    if "edited_gender_preview" not in st.session_state:
+        st.session_state.edited_gender_preview = partner_gender
+
+    st.image(get_avatar("assistant", st.session_state.edited_gender_preview), width=140)
 
     st.markdown("#### 伴侣设定")
-    edited_name = st.text_input("名称", value=partner_name, placeholder="给小甜甜起个名字")
     edited_gender = st.selectbox(
         "性别",
         GENDER_OPTIONS,
         index=GENDER_OPTIONS.index(partner_gender) if partner_gender in GENDER_OPTIONS else 0,
     )
+    st.session_state.edited_gender_preview = edited_gender
+
     edited_gender_custom = ""
     if edited_gender == "其他":
         edited_gender_custom = st.text_input(
             "其他性别",
             value=partner_gender_custom,
             placeholder="请输入自定义性别",
+            key="gender_custom_input",
         )
+
+    if edited_gender == partner_gender:
+        name_value = partner_name
+        name_key = "name_saved"
+        personality_value = partner_personality
+        personality_key = "personality_saved"
+    else:
+        name_value = get_default_name(edited_gender, edited_gender_custom)
+        name_key = (
+            f"name_{edited_gender}_{edited_gender_custom}"
+            if edited_gender == "其他"
+            else f"name_{edited_gender}"
+        )
+        personality_value = GENDER_DEFAULT_PERSONALITY.get(
+            edited_gender, GENDER_DEFAULT_PERSONALITY["女"]
+        )
+        personality_key = f"personality_{edited_gender}"
+
+    edited_name = st.text_input(
+        "名称",
+        value=name_value,
+        placeholder="给 TA 起个名字",
+        key=name_key,
+    )
+
     edited_personality = st.text_area(
         "性格",
-        value=partner_personality,
+        value=personality_value,
         placeholder="描述一下 TA 的性格",
         height=100,
+        key=personality_key,
     )
     if st.button("保存设定", use_container_width=True):
         save_partner_settings(
             edited_name, edited_personality, edited_gender, edited_gender_custom
         )
+        st.session_state.edited_gender_preview = edited_gender
         st.rerun()
 
     st.caption(f"你的专属搭子 · {edited_name.strip() or partner_name}")
