@@ -3,6 +3,14 @@ __pycache__/
 *.pyc
 .env
 .idea/
+.streamlit/secrets.toml
+
+# AI 伴侣运行时数据
 study/chat_history.json
 study/conversations.json
-.streamlit/secrets.toml
+study/assets/custom/
+
+# 与伴侣无关的本地文件
+data/
+test/
+output.png

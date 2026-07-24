@@ -8,10 +8,15 @@ from datetime import datetime
 BASE_DIR = os.path.dirname(__file__)
 CONVERSATIONS_FILE = os.path.join(BASE_DIR, "conversations.json")
 LEGACY_CHAT_FILE = os.path.join(BASE_DIR, "chat_history.json")
-USER_AVATAR = os.path.join(BASE_DIR, "assets", "user_avatar.png")
-ASSISTANT_AVATAR = os.path.join(BASE_DIR, "assets", "assistant_avatar.png")
-HELICOPTER_AVATAR = os.path.join(BASE_DIR, "assets", "helicopter_avatar.png")
-WALMART_BAG_AVATAR = os.path.join(BASE_DIR, "assets", "walmart_bag_avatar.png")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+CUSTOM_AVATAR_DIR = os.path.join(ASSETS_DIR, "custom")
+USER_AVATAR = os.path.join(ASSETS_DIR, "user_avatar.png")
+ASSISTANT_AVATAR = os.path.join(ASSETS_DIR, "assistant_avatar.png")
+HELICOPTER_AVATAR = os.path.join(ASSETS_DIR, "helicopter_avatar.png")
+WALMART_BAG_AVATAR = os.path.join(ASSETS_DIR, "walmart_bag_avatar.png")
+
+ALLOWED_AVATAR_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+DEFAULT_AVATARS = {"user": None, "assistant": None}
 
 GENDER_OPTIONS = ["女", "男", "武装直升机", "沃尔玛塑料袋", "其他"]
 
@@ -91,10 +96,35 @@ def ensure_data_shape(data):
         data["partner"]["gender"] = DEFAULT_PARTNER["gender"]
     if "gender_custom" not in data["partner"]:
         data["partner"]["gender_custom"] = ""
+    if "avatars" not in data or not isinstance(data["avatars"], dict):
+        data["avatars"] = DEFAULT_AVATARS.copy()
+    else:
+        for role in ("user", "assistant"):
+            path = data["avatars"].get(role)
+            if path and not os.path.exists(resolve_avatar_path(path)):
+                data["avatars"][role] = None
+            elif role not in data["avatars"]:
+                data["avatars"][role] = None
     if not any(item["id"] == data.get("active_id") for item in data.get("items", [])):
         if data.get("items"):
             data["active_id"] = data["items"][0]["id"]
     return data
+
+
+def ensure_custom_avatar_dir():
+    os.makedirs(CUSTOM_AVATAR_DIR, exist_ok=True)
+
+
+def resolve_avatar_path(path):
+    if not path:
+        return None
+    if os.path.isabs(path):
+        return path
+    return os.path.join(BASE_DIR, path)
+
+
+def relative_avatar_path(path):
+    return os.path.relpath(path, BASE_DIR).replace("\\", "/")
 
 
 def load_conversations_data():
@@ -117,6 +147,7 @@ def load_conversations_data():
             "active_id": conversation["id"],
             "items": [conversation],
             "partner": DEFAULT_PARTNER.copy(),
+            "avatars": DEFAULT_AVATARS.copy(),
         })
         save_conversations_data(data)
         return data
@@ -126,6 +157,7 @@ def load_conversations_data():
         "active_id": conversation["id"],
         "items": [conversation],
         "partner": DEFAULT_PARTNER.copy(),
+        "avatars": DEFAULT_AVATARS.copy(),
     })
     save_conversations_data(data)
     return data
@@ -226,6 +258,60 @@ def get_avatars_by_gender(gender):
     }
 
 
+def get_custom_avatars():
+    return st.session_state.conversations_data.get("avatars", DEFAULT_AVATARS.copy())
+
+
+def save_uploaded_avatar(role, uploaded_file):
+    if role not in ("user", "assistant") or uploaded_file is None:
+        return False
+
+    _, ext = os.path.splitext(uploaded_file.name.lower())
+    if ext not in ALLOWED_AVATAR_EXTS:
+        return False
+
+    ensure_custom_avatar_dir()
+    filename = f"{role}_avatar{ext}"
+    save_path = os.path.join(CUSTOM_AVATAR_DIR, filename)
+
+    # 清理同角色旧扩展名文件，避免残留
+    for old_name in os.listdir(CUSTOM_AVATAR_DIR):
+        if old_name.startswith(f"{role}_avatar.") and old_name != filename:
+            try:
+                os.remove(os.path.join(CUSTOM_AVATAR_DIR, old_name))
+            except OSError:
+                pass
+
+    with open(save_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+
+    data = st.session_state.conversations_data
+    data.setdefault("avatars", DEFAULT_AVATARS.copy())
+    data["avatars"][role] = relative_avatar_path(save_path)
+    save_conversations_data(data)
+    return True
+
+
+def clear_custom_avatar(role):
+    if role not in ("user", "assistant"):
+        return
+
+    data = st.session_state.conversations_data
+    data.setdefault("avatars", DEFAULT_AVATARS.copy())
+    old_path = resolve_avatar_path(data["avatars"].get(role))
+    data["avatars"][role] = None
+    save_conversations_data(data)
+
+    if old_path and os.path.exists(old_path):
+        old_abs = os.path.abspath(old_path)
+        custom_abs = os.path.abspath(CUSTOM_AVATAR_DIR)
+        if old_abs.startswith(custom_abs + os.sep):
+            try:
+                os.remove(old_abs)
+            except OSError:
+                pass
+
+
 def get_gender_label(gender, gender_custom=""):
     if gender == "其他":
         return gender_custom.strip() or "其他"
@@ -261,6 +347,11 @@ def build_system_prompt(name, personality, gender="女", gender_custom=""):
 
 
 def get_avatar(role, gender=None):
+    custom = get_custom_avatars().get(role)
+    custom_path = resolve_avatar_path(custom)
+    if custom_path and os.path.exists(custom_path):
+        return custom_path
+
     if gender is None:
         gender = get_partner_settings().get("gender", "女")
     return get_avatars_by_gender(gender).get(role, role)
@@ -269,6 +360,43 @@ def get_avatar(role, gender=None):
 def render_message(role, content, gender=None):
     with st.chat_message(role, avatar=get_avatar(role, gender)):
         st.markdown(content)
+
+
+def render_avatar_uploader(role, label, gender_for_default):
+    custom = get_custom_avatars().get(role)
+    has_custom = bool(custom and os.path.exists(resolve_avatar_path(custom)))
+
+    st.image(get_avatar(role, gender_for_default), width=120)
+    st.caption(f"{'已自定义 · ' if has_custom else '默认 · '}{label}")
+
+    upload_key = f"avatar_upload_{role}_{st.session_state.get(f'avatar_nonce_{role}', 0)}"
+    uploaded = st.file_uploader(
+        f"上传{label}头像",
+        type=["png", "jpg", "jpeg", "webp", "gif"],
+        key=upload_key,
+        label_visibility="collapsed",
+        help=f"支持 png / jpg / webp / gif，上传后立即生效",
+    )
+    if uploaded is not None:
+        if save_uploaded_avatar(role, uploaded):
+            st.session_state[f"avatar_nonce_{role}"] = (
+                st.session_state.get(f"avatar_nonce_{role}", 0) + 1
+            )
+            st.success(f"{label}头像已更新")
+            st.rerun()
+        else:
+            st.error("仅支持 png / jpg / jpeg / webp / gif")
+
+    if has_custom and st.button(
+        f"恢复{label}默认头像",
+        key=f"reset_avatar_{role}",
+        use_container_width=True,
+    ):
+        clear_custom_avatar(role)
+        st.session_state[f"avatar_nonce_{role}"] = (
+            st.session_state.get(f"avatar_nonce_{role}", 0) + 1
+        )
+        st.rerun()
 
 
 st.set_page_config(
@@ -327,12 +455,19 @@ st.markdown(
         background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
     }
     div[data-testid="stSidebar"] img {
-        width: 140px !important;
-        height: 140px !important;
+        width: 120px !important;
+        height: 120px !important;
         border-radius: 50%;
         object-fit: cover;
         border: 3px solid #ff6b9d;
         box-shadow: 0 8px 24px rgba(255, 107, 157, 0.25);
+    }
+    section[data-testid="stFileUploader"] {
+        margin-top: 0.35rem;
+        margin-bottom: 0.5rem;
+    }
+    section[data-testid="stFileUploader"] button {
+        width: 100%;
     }
     .conv-meta {
         color: #9ca3af;
@@ -365,8 +500,20 @@ with st.sidebar:
     if "edited_gender_preview" not in st.session_state:
         st.session_state.edited_gender_preview = partner_gender
 
-    st.image(get_avatar("assistant", st.session_state.edited_gender_preview), width=140)
+    st.markdown("#### 头像设置")
+    render_avatar_uploader(
+        "assistant",
+        "伴侣",
+        st.session_state.edited_gender_preview,
+    )
+    st.markdown("")
+    render_avatar_uploader(
+        "user",
+        "我的",
+        st.session_state.edited_gender_preview,
+    )
 
+    st.markdown("---")
     st.markdown("#### 伴侣设定")
     edited_gender = st.selectbox(
         "性别",
