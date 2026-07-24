@@ -375,7 +375,7 @@ def render_avatar_uploader(role, label, gender_for_default):
         type=["png", "jpg", "jpeg", "webp", "gif"],
         key=upload_key,
         label_visibility="collapsed",
-        help=f"支持 png / jpg / webp / gif，上传后立即生效",
+        help="支持 png / jpg / webp / gif，上传后立即生效",
     )
     if uploaded is not None:
         if save_uploaded_avatar(role, uploaded):
@@ -387,16 +387,19 @@ def render_avatar_uploader(role, label, gender_for_default):
         else:
             st.error("仅支持 png / jpg / jpeg / webp / gif")
 
-    if has_custom and st.button(
-        f"恢复{label}默认头像",
-        key=f"reset_avatar_{role}",
-        use_container_width=True,
-    ):
-        clear_custom_avatar(role)
-        st.session_state[f"avatar_nonce_{role}"] = (
-            st.session_state.get(f"avatar_nonce_{role}", 0) + 1
-        )
-        st.rerun()
+    if has_custom:
+        if st.button(
+            f"🗑 删除当前照片",
+            key=f"delete_avatar_{role}",
+            use_container_width=True,
+            help=f"删除已上传的{label}头像，恢复为默认头像",
+        ):
+            clear_custom_avatar(role)
+            st.session_state[f"avatar_nonce_{role}"] = (
+                st.session_state.get(f"avatar_nonce_{role}", 0) + 1
+            )
+            st.rerun()
+        st.caption("删除后恢复默认头像")
 
 
 st.set_page_config(
