@@ -1,0 +1,17 @@
+{
+  "name": "AI 智能伴侣 (Streamlit)",
+  "install": "sudo apt-get update && sudo apt-get install -y python3-venv && python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements.txt",
+  "ports": [
+    {
+      "name": "streamlit",
+      "port": 8501
+    }
+  ],
+  "terminals": [
+    {
+      "name": "streamlit",
+      "command": ".venv/bin/streamlit run study/aiPartner.py --server.port 8501 --server.address 0.0.0.0 --server.headless true",
+      "description": "Runs the AI 智能伴侣 Streamlit chat app on port 8501. Set the DEEPSEEK_API_KEY secret to enable live chat replies."
+    }
+  ]
+}

@@ -482,10 +482,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-client = OpenAI(
-    api_key=os.environ.get("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com",
-)
+# 延迟初始化：缺少 DEEPSEEK_API_KEY 时也能正常加载界面
+def get_client():
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        return None
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://api.deepseek.com",
+    )
 
 init_conversations_state()
 active_conversation = get_active_conversation()
@@ -633,38 +638,42 @@ for message in messages:
 prompt = st.chat_input(f"和{partner_name}说点什么...")
 
 if prompt:
-    messages.append({"role": "user", "content": prompt})
-    render_message("user", prompt, partner_gender)
+    client = get_client()
+    if client is None:
+        st.error("API密钥未配置，无法发送消息。请设置 DEEPSEEK_API_KEY 环境变量。")
+    else:
+        messages.append({"role": "user", "content": prompt})
+        render_message("user", prompt, partner_gender)
 
-    with st.chat_message("assistant", avatar=get_avatar("assistant", partner_gender)):
-        reply_box = st.empty()
-        with st.status(f"{partner_name}正在思考...", expanded=False) as status:
-            stream = client.chat.completions.create(
-                model="deepseek-v4-pro",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *messages,
-                ],
-                stream=True,
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}},
-            )
+        with st.chat_message("assistant", avatar=get_avatar("assistant", partner_gender)):
+            reply_box = st.empty()
+            with st.status(f"{partner_name}正在思考...", expanded=False) as status:
+                stream = client.chat.completions.create(
+                    model="deepseek-v4-pro",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *messages,
+                    ],
+                    stream=True,
+                    reasoning_effort="high",
+                    extra_body={"thinking": {"type": "enabled"}},
+                )
 
-            reply = ""
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    if not reply:
-                        status.update(label=f"{partner_name}开始回答了", state="running")
-                    reply += delta.content
-                    reply_box.markdown(reply + "▌")
+                reply = ""
+                for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        if not reply:
+                            status.update(label=f"{partner_name}开始回答了", state="running")
+                        reply += delta.content
+                        reply_box.markdown(reply + "▌")
 
-            if reply:
-                reply_box.markdown(reply)
-                status.update(label="回答完成", state="complete")
-            else:
-                reply_box.warning("这次没想好怎么回，你再问一次？")
-                status.update(label="回答失败", state="error")
+                if reply:
+                    reply_box.markdown(reply)
+                    status.update(label="回答完成", state="complete")
+                else:
+                    reply_box.warning("这次没想好怎么回，你再问一次？")
+                    status.update(label="回答失败", state="error")
 
-    messages.append({"role": "assistant", "content": reply})
-    update_active_conversation(messages)
+        messages.append({"role": "assistant", "content": reply})
+        update_active_conversation(messages)
