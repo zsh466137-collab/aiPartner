@@ -482,10 +482,31 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-client = OpenAI(
-    api_key=os.environ.get("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com",
-)
+def get_deepseek_api_key() -> str | None:
+    """优先读 Streamlit secrets，其次环境变量。"""
+    try:
+        key = st.secrets.get("DEEPSEEK_API_KEY")
+        if key:
+            return str(key).strip()
+    except Exception:
+        pass
+    return (os.environ.get("DEEPSEEK_API_KEY") or "").strip() or None
+
+
+def get_openai_client() -> OpenAI | None:
+    api_key = get_deepseek_api_key()
+    if not api_key:
+        return None
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://api.deepseek.com",
+        timeout=60.0,
+        max_retries=2,
+    )
+
+
+# 伴侣闲聊优先低延迟：用 flash + 关闭思考模式，避免一直停在「正在思考」
+CHAT_MODEL = "deepseek-v4-flash"
 
 init_conversations_state()
 active_conversation = get_active_conversation()
@@ -633,37 +654,62 @@ for message in messages:
 prompt = st.chat_input(f"和{partner_name}说点什么...")
 
 if prompt:
+    client = get_openai_client()
+    if client is None:
+        st.error(
+            "未配置 DEEPSEEK_API_KEY。请在 Streamlit Cloud → App settings → Secrets "
+            "中添加：`DEEPSEEK_API_KEY = \"sk-...\"`"
+        )
+        st.stop()
+
     messages.append({"role": "user", "content": prompt})
     render_message("user", prompt, partner_gender)
 
+    reply = ""
     with st.chat_message("assistant", avatar=get_avatar("assistant", partner_gender)):
         reply_box = st.empty()
         with st.status(f"{partner_name}正在思考...", expanded=False) as status:
-            stream = client.chat.completions.create(
-                model="deepseek-v4-pro",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *messages,
-                ],
-                stream=True,
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}},
-            )
+            try:
+                stream = client.chat.completions.create(
+                    model=CHAT_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *messages,
+                    ],
+                    stream=True,
+                    # 关闭思考模式，避免 reasoning 阶段长时间无 content 导致一直转圈
+                    extra_body={"thinking": {"type": "disabled"}},
+                )
 
-            reply = ""
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    if not reply:
-                        status.update(label=f"{partner_name}开始回答了", state="running")
-                    reply += delta.content
-                    reply_box.markdown(reply + "▌")
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    piece = getattr(delta, "content", None)
+                    if piece:
+                        if not reply:
+                            status.update(
+                                label=f"{partner_name}开始回答了", state="running"
+                            )
+                        reply += piece
+                        reply_box.markdown(reply + "▌")
 
-            if reply:
-                reply_box.markdown(reply)
-                status.update(label="回答完成", state="complete")
-            else:
-                reply_box.warning("这次没想好怎么回，你再问一次？")
+                if reply:
+                    reply_box.markdown(reply)
+                    status.update(label="回答完成", state="complete")
+                else:
+                    reply_box.warning("这次没想好怎么回，你再问一次？")
+                    status.update(label="回答失败", state="error")
+            except Exception as e:
+                err = str(e)
+                if "401" in err or "Authentication" in err or "invalid" in err.lower():
+                    tip = "API Key 无效或未配置，请检查 Streamlit Secrets 中的 DEEPSEEK_API_KEY。"
+                elif "timeout" in err.lower() or "timed out" in err.lower():
+                    tip = "请求超时，请稍后重试。"
+                else:
+                    tip = f"调用模型失败：{err}"
+                reply = f"（出错了）{tip}"
+                reply_box.error(tip)
                 status.update(label="回答失败", state="error")
 
     messages.append({"role": "assistant", "content": reply})
